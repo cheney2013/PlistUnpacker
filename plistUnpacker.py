@@ -5,6 +5,7 @@ from PIL import Image
 import numpy as np
 import cv2
 from pathlib import Path
+import json
 
 def endWith(s,*endstring):
     array = map(s.endswith,endstring)
@@ -252,26 +253,94 @@ def cropImg(img, outfile, vertices_x, vertices_y, x, y, w, h):
 	# cv2.imwrite(outfile, crop)
 	cv2.imencode(Path(outfile).suffix, crop)[1].tofile(outfile)
 
+def get_recursive_file_list(path):
+    current_files = os.listdir(path)
+    all_files=[]
+    for file_name in current_files:
+        full_file_name=os.path.join(path,file_name)
+        if endWith(full_file_name,'.plist') or endWith(full_file_name, '.json'):
+            full_file_name=full_file_name.rsplit('.', 1)[0]
+            all_files.append(full_file_name)
+        if os.path.isdir(full_file_name):
+            next_level_files = get_recursive_file_list(full_file_name)
+            all_files.extend(next_level_files)
+    return all_files
+
+def gen_json(json_filename, png_filename):
+    baseName = os.path.basename(png_filename)
+    baseName = baseName[0:baseName.index('.')]
+    file_path = os.path.join(os.path.dirname(png_filename), baseName)
+
+    print("----------- start generating", baseName)
+
+    with open(json_filename, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    big_image = Image.open(png_filename)
+    
+    frames = data.get('frames') or {}
+
+    for k, v in frames.items():
+        frame = v
+        x = frame['x']
+        y = frame['y']
+        w = frame['w']
+        h = frame['h']
+
+        box = (x, y, x + w, y + h)
+        rect_on_big = big_image.crop(box)
+
+        rotated = v.get('rotated', False)
+        if rotated:
+            rect_on_big = rect_on_big.transpose(Image.ROTATE_90)
+
+        sourceSize = v.get('sourceSize', {'w': w, 'h': h})
+        offset = v.get('spriteSourceSize', {'x': 0, 'y': 0})
+
+        result_image = Image.new('RGBA', (sourceSize['w'], sourceSize['h']), (0, 0, 0, 0))
+        result_box = (
+            offset['x'],
+            offset['y']
+        )
+        result_image.paste(rect_on_big, result_box)
+
+        k = k[0:k.rfind('_png')] + '.png'
+
+        outfile = os.path.join(file_path, k)
+        outpath = os.path.dirname(outfile)
+        if not os.path.exists(outpath):
+            os.makedirs(outpath)
+        print(k, "generated")
+        result_image.save(outfile)
+
+    print("-----------")
+
+
 if __name__ == '__main__':
     if len(sys.argv) != 2:
-        print("USAGE: python plistUnpacker.py [Directory/xxx.plist]")
+        print("USAGE: python plistUnpacker.py [Directory/xxx.plist|xxx.json]")
     else:
         pathOrFilename = sys.argv[1]
         if os.path.isdir(pathOrFilename):
-            allPlistArray = get_recursive_file_list(pathOrFilename)
-            for plist in allPlistArray:
-                filename = plist
-                plist_filename =filename+'.plist'
-                png_filename = filename+'.png'
-                if(os.path.exists(plist_filename) and os.path.exists(png_filename)):
-                    gen_png(plist_filename,png_filename)
+            allFiles = get_recursive_file_list(pathOrFilename)
+            for base in allFiles:
+                plist_file = base + '.plist'
+                json_file = base + '.json'
+                png_file = base + '.png'
+
+                if os.path.exists(plist_file) and os.path.exists(png_file):
+                    gen_png(plist_file, png_file)
+                elif os.path.exists(json_file) and os.path.exists(png_file):
+                    gen_json(json_file, png_file)
                 else:
-                    print("make sure you have both %s plist and png files in the same directory" %plist_filename)
+                    print(f"Missing .png or descriptor for {base}")
         else:
-            if endWith(pathOrFilename,'.plist'):
-                newFileName = pathOrFilename[0:pathOrFilename.find('.plist')]
-                plist_filename =newFileName +'.plist'
-                png_filename = newFileName +'.png'
-                gen_png(plist_filename,png_filename)
+            if endWith(pathOrFilename, '.plist'):
+                base = pathOrFilename[0:pathOrFilename.find('.plist')]
+                gen_png(base + '.plist', base + '.png')
+            elif endWith(pathOrFilename, '.json'):
+                base = pathOrFilename[0:pathOrFilename.find('.json')]
+                gen_json(base + '.json', base + '.png')
             else:
-                print("USAGE: python plistUnpacker.py [Directory/***.plist]")
+                print("USAGE: python plistUnpacker.py [Directory/***.plist|***.json]")
+
